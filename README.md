@@ -8,6 +8,30 @@ CARE is a comprehensive, decentralized health information ecosystem designed to 
 
 The ecosystem consists of several interconnected components:
 
+```mermaid
+flowchart TD
+    %% Core Entities
+    Mobile["📱 CareConnect<br>(Mobile Wallet)"]
+    Web["🖥️ care_fe<br>(Web Dashboard)"]
+    CoreAPI["⚙️ care_be<br>(Core Backend API)"]
+    UHI["🔄 uhi-switch<br>(UHI Router)"]
+    AI["🧠 Qwen 2.5 72B<br>(Hugging Face API)"]
+    
+    %% Decentralized Nodes
+    HospA["🏥 Hospital A Node<br>(Database & API)"]
+    HospB["🏥 Hospital B Node<br>(Database & API)"]
+
+    %% Connections
+    Mobile -->|"REST API"| CoreAPI
+    Web -->|"REST API"| CoreAPI
+    
+    CoreAPI -->|"AI Analysis Request"| AI
+    CoreAPI -->|"UHI Protocol"| UHI
+    
+    UHI -->|"Secure Routing"| HospA
+    UHI -->|"Secure Routing"| HospB
+```
+
 ### 1. CareConnect (Mobile Health Wallet)
 **Tech Stack:** Flutter, Dart, BLoC Pattern
 A patient-facing mobile application that acts as a digital health wallet. 
