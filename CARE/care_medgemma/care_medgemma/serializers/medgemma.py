@@ -1,0 +1,74 @@
+from rest_framework import serializers
+
+from care_medgemma.models.medgemma import MedGemmaAnalysis
+
+
+class MedGemmaAnalysisSerializer(serializers.ModelSerializer):
+    requester_name = serializers.CharField(
+        source="requested_by.get_full_name", read_only=True
+    )
+
+    class Meta:
+        model = MedGemmaAnalysis
+        fields = [
+            "external_id",
+            "encounter",
+            "requester_name",
+            "input_bundle",
+            "analysis_type",
+            "analysis_result",
+            "status",
+            "model_version",
+            "is_mock",
+            "disclaimer",
+            "processing_time_ms",
+            "created_date",
+        ]
+        read_only_fields = [
+            "external_id",
+            "requester_name",
+            "analysis_result",
+            "status",
+            "model_version",
+            "is_mock",
+            "disclaimer",
+            "processing_time_ms",
+            "created_date",
+        ]
+
+
+class MedGemmaRequestSerializer(serializers.Serializer):
+    """Serializer for submitting an analysis request."""
+    analysis_type = serializers.ChoiceField(
+        choices=MedGemmaAnalysis.AnalysisType.choices,
+    )
+    input_data = serializers.JSONField(
+        required=False,
+        default=dict,
+    )
+    encounter_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    preset = serializers.ChoiceField(
+        choices=[
+            ("comprehensive", "Comprehensive Analysis"),
+            ("summary", "Clinical Summary"),
+            ("critical", "Critical Flags & Alerts"),
+            ("timeline", "Medical Timeline"),
+        ],
+        required=False,
+        allow_blank=True,
+        default="",
+        help_text="Optional preset to override the analysis prompt. "
+                  "If not provided, the analysis_type determines the prompt.",
+    )
+    patient_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        help_text="Patient ABHA ID (e.g. 91-1234-5678-9012) or patient UUID. "
+                  "When provided, the system pulls all patient files from MinIO "
+                  "and includes their content in the analysis.",
+    )

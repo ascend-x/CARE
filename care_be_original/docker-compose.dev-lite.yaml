@@ -1,0 +1,23 @@
+services:
+  backend:
+    image: care_local
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+      args:
+        ADDITIONAL_PLUGS: ${ADDITIONAL_PLUGS:-}
+    env_file:
+      - ./docker/.dev-lite.env
+    volumes:
+      - .:/app
+      - ../care_medgemma/care_medgemma:/app/care_medgemma
+      - ../devaganesh-reports-hospital-1:/app/devaganesh-reports-hospital-1
+      - ../devaganesh-reports-hospital-2:/app/devaganesh-reports-hospital-2
+    entrypoint: [ "bash", "scripts/start-dev-lite.sh" ]
+    ports:
+      - "9000:9000"
+      - "9876:9876"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_started

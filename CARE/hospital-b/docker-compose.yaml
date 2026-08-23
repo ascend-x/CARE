@@ -1,0 +1,25 @@
+version: "3.8"
+
+# Hospital B — Metro Radiology & Diagnostics Center (Referral)
+# Deploy on PC-2 / internal network 2
+
+services:
+  care-hospital-b:
+    build:
+      context: ../../care_be
+      dockerfile: Dockerfile
+    container_name: hospital-b-backend
+    ports:
+      - "9002:9000"
+      - "4002:9000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HOSPITAL_ID=HOSP-METRO-B
+      - HOSPITAL_NAME=Metro Radiology & Diagnostics Center
+      - UHI_SWITCH_URL=http://host.docker.internal:8080
+    volumes:
+      - ./data:/app/data
+      - ../../care_fe:/care_fe
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

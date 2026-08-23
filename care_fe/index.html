@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CARE EMR — AI-Powered Healthcare</title>
+<meta name="description" content="CARE Electronic Medical Records with MedGemma AI clinical analysis. Open Healthcare Network.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0a0e1a;--bg-secondary:#111827;--bg-card:rgba(17,24,39,.85);
+  --bg-glass:rgba(255,255,255,.04);--border:rgba(255,255,255,.08);
+  --text-primary:#f1f5f9;--text-secondary:#94a3b8;--text-muted:#64748b;
+  --accent:#6366f1;--accent-glow:rgba(99,102,241,.25);
+  --success:#10b981;--warning:#f59e0b;--danger:#ef4444;--info:#3b82f6;
+  --radius:12px;--transition:all .3s cubic-bezier(.4,0,.2,1);
+}
+html{font-size:15px}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg-primary);color:var(--text-primary);min-height:100vh;overflow-x:hidden}
+
+/* Animated background */
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 20% 50%,rgba(99,102,241,.08),transparent 50%),radial-gradient(ellipse at 80% 20%,rgba(16,185,129,.06),transparent 50%),radial-gradient(ellipse at 50% 80%,rgba(245,158,11,.04),transparent 50%);pointer-events:none;z-index:0}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px}
+
+/* Layout */
+#app{position:relative;z-index:1;min-height:100vh;display:flex}
+.sidebar{width:260px;background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:50;transition:transform .3s}
+.sidebar-logo{padding:24px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.sidebar-logo .logo-icon{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800}
+.sidebar-logo h1{font-size:1.2rem;font-weight:700;background:linear-gradient(135deg,#c7d2fe,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.sidebar-nav{flex:1;padding:12px;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;color:var(--text-secondary);cursor:pointer;transition:var(--transition);font-size:.9rem;font-weight:500;margin-bottom:2px}
+.nav-item:hover{background:var(--bg-glass);color:var(--text-primary)}
+.nav-item.active{background:rgba(99,102,241,.15);color:#a5b4fc;border:1px solid rgba(99,102,241,.2)}
+.nav-item .icon{font-size:1.1rem;width:24px;text-align:center}
+.sidebar-footer{padding:16px 20px;border-top:1px solid var(--border)}
+.user-badge{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:var(--bg-glass)}
+.user-avatar{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#ec4899);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem}
+.user-info{flex:1;min-width:0}.user-info .name{font-size:.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.user-info .role{font-size:.7rem;color:var(--text-muted)}
+.btn-logout{background:none;border:1px solid var(--border);color:var(--text-muted);padding:6px 8px;border-radius:6px;cursor:pointer;font-size:.75rem;transition:var(--transition)}
+.btn-logout:hover{border-color:var(--danger);color:var(--danger)}
+
+/* Main content */
+.main{flex:1;margin-left:260px;padding:28px 32px;min-height:100vh}
+
+/* Cards */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;backdrop-filter:blur(12px);transition:var(--transition)}
+.card:hover{border-color:rgba(255,255,255,.12)}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.card-title{font-size:1.1rem;font-weight:700}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:10px;font-family:inherit;font-size:.88rem;font-weight:600;cursor:pointer;border:none;transition:var(--transition)}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#8b5cf6);color:white;box-shadow:0 4px 15px var(--accent-glow)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 25px var(--accent-glow)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text-secondary)}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
+.btn-danger{background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.2)}
+.btn-danger:hover{background:rgba(239,68,68,.25)}
+.btn-sm{padding:6px 14px;font-size:.8rem;border-radius:8px}
+
+/* Inputs */
+.form-group{margin-bottom:18px}
+.form-label{display:block;font-size:.82rem;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.form-input,.form-select,.form-textarea{width:100%;padding:11px 14px;background:var(--bg-glass);border:1px solid var(--border);border-radius:10px;color:var(--text-primary);font-family:inherit;font-size:.9rem;transition:var(--transition);outline:none}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+.form-select{appearance:none;cursor:pointer}
+.form-textarea{resize:vertical;min-height:80px}
+option{background:var(--bg-secondary)}
+
+/* Preset cards */
+.preset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.preset-card{padding:14px;border-radius:10px;border:1px solid var(--border);cursor:pointer;transition:var(--transition);background:var(--bg-glass)}
+.preset-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.preset-card.selected{border-color:var(--accent);background:rgba(99,102,241,.1);box-shadow:0 0 20px var(--accent-glow)}
+.preset-card .preset-icon{font-size:1.5rem;margin-bottom:6px}
+.preset-card .preset-name{font-weight:700;font-size:.9rem;margin-bottom:4px}
+.preset-card .preset-desc{font-size:.75rem;color:var(--text-muted);line-height:1.4}
+
+/* Stats grid */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:28px}
+.stat-card{padding:20px;border-radius:var(--radius);background:var(--bg-card);border:1px solid var(--border);position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.stat-card.purple::before{background:linear-gradient(90deg,var(--accent),#8b5cf6)}
+.stat-card.green::before{background:linear-gradient(90deg,var(--success),#34d399)}
+.stat-card.amber::before{background:linear-gradient(90deg,var(--warning),#fbbf24)}
+.stat-card.blue::before{background:linear-gradient(90deg,var(--info),#60a5fa)}
+.stat-value{font-size:2rem;font-weight:800;margin-bottom:4px}
+.stat-label{font-size:.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+
+/* Table */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--border);font-size:.85rem}
+th{color:var(--text-muted);font-weight:600;text-transform:uppercase;font-size:.75rem;letter-spacing:.5px}
+td{color:var(--text-secondary)}
+tr:hover td{color:var(--text-primary);background:var(--bg-glass)}
+
+/* Badges */
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.3px}
+.badge-success{background:rgba(16,185,129,.15);color:var(--success)}
+.badge-warning{background:rgba(245,158,11,.15);color:var(--warning)}
+.badge-danger{background:rgba(239,68,68,.15);color:var(--danger)}
+.badge-info{background:rgba(59,130,246,.15);color:var(--info)}
+.badge-neutral{background:rgba(148,163,184,.15);color:var(--text-secondary)}
+
+/* Result sections */
+.result-section{margin-bottom:24px;padding:20px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-glass)}
+.result-section h3{font-size:1rem;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.result-summary{font-size:.9rem;line-height:1.7;color:var(--text-secondary);padding:14px 18px;border-radius:10px;background:rgba(99,102,241,.05);border-left:3px solid var(--accent)}
+.flags-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+
+/* Loading spinner */
+.spinner{display:inline-block;width:20px;height:20px;border:2px solid rgba(255,255,255,.2);border-top-color:white;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Login page */
+.login-container{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-box{width:100%;max-width:420px;padding:40px;border-radius:20px;background:var(--bg-card);border:1px solid var(--border);backdrop-filter:blur(20px);box-shadow:0 25px 50px rgba(0,0,0,.4)}
+.login-box h2{font-size:1.6rem;font-weight:800;text-align:center;margin-bottom:8px;background:linear-gradient(135deg,#c7d2fe,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.login-box .subtitle{text-align:center;color:var(--text-muted);font-size:.85rem;margin-bottom:28px}
+.login-error{padding:10px 14px;border-radius:8px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);color:var(--danger);font-size:.85rem;margin-bottom:16px;display:none}
+
+/* Page header */
+.page-header{margin-bottom:28px}
+.page-header h2{font-size:1.5rem;font-weight:800;margin-bottom:4px}
+.page-header p{color:var(--text-muted);font-size:.9rem}
+
+/* Animations */
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn .4s ease-out}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.pulse{animation:pulse 2s ease-in-out infinite}
+
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%)}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0;padding:16px}
+  .stats-grid{grid-template-columns:1fr 1fr}
+  .preset-grid{grid-template-columns:1fr}
+}
+
+/* Empty state */
+.empty-state{text-align:center;padding:50px 20px;color:var(--text-muted)}
+.empty-state .icon{font-size:3rem;margin-bottom:12px;opacity:.5}
+.empty-state h3{font-size:1.1rem;color:var(--text-secondary);margin-bottom:6px}
+
+/* Toast */
+.toast{position:fixed;bottom:24px;right:24px;padding:14px 20px;border-radius:12px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--text-primary);font-size:.88rem;z-index:999;transform:translateY(100px);opacity:0;transition:var(--transition);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.success{border-color:rgba(16,185,129,.3)}
+.toast.error{border-color:rgba(239,68,68,.3)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+<script>
+// ═══════════════════════════════════════════════════════════
+//                    CARE LIGHTWEIGHT FRONTEND
+// ═══════════════════════════════════════════════════════════
+
+const API = window.location.origin;
+let currentUser = null;
+let currentPage = 'dashboard';
+let appConfig = { hospital_name: 'CARE EMR', hospital_id: '' };
+
+// ─── Storage ─────────────────────────────────────────────
+const storage = {
+  get token() { return localStorage.getItem('care_access_token'); },
+  set token(v) { v ? localStorage.setItem('care_access_token', v) : localStorage.removeItem('care_access_token'); },
+  get refresh() { return localStorage.getItem('care_refresh_token'); },
+  set refresh(v) { v ? localStorage.setItem('care_refresh_token', v) : localStorage.removeItem('care_refresh_token'); },
+};
+
+// ─── API Helper ─────────────────────────────────────────────
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (storage.token && !opts.noAuth) headers['Authorization'] = `Bearer ${storage.token}`;
+  const res = await fetch(`${API}${path}`, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (res.status === 401 && storage.refresh && !opts._retry) {
+    try {
+      const r = await fetch(`${API}/api/v1/auth/token/refresh/`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({refresh: storage.refresh}) });
+      if (r.ok) { const d = await r.json(); storage.token = d.access; storage.refresh = d.refresh; return api(path, {...opts, _retry: true}); }
+    } catch(e) {}
+    logout(); return null;
+  }
+  if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.detail || `Request failed (${res.status})`); }
+  return res.json();
+}
+
+// ─── Toast ─────────────────────────────────────────────
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = `toast ${type} show`;
+  setTimeout(()=> el.className = 'toast', 3000);
+}
+
+// ─── Auth ─────────────────────────────────────────────
+async function login(username, password) {
+  const data = await api('/api/v1/auth/login/', { method: 'POST', body: { username, password }, noAuth: true });
+  storage.token = data.access; storage.refresh = data.refresh;
+  currentUser = await api('/api/v1/users/me/');
+  render();
+}
+
+function logout() {
+  storage.token = null; storage.refresh = null; currentUser = null;
+  render();
+}
+
+// ─── Render Engine ─────────────────────────────────────
+function render() {
+  const app = document.getElementById('app');
+  if (!storage.token || !currentUser) { app.innerHTML = renderLogin(); bindLogin(); return; }
+  app.innerHTML = renderSidebar() + `<div class="main fade-in" id="main-content"></div>`;
+  bindSidebar();
+  navigateTo(currentPage);
+}
+
+// ─── Login Page ─────────────────────────────────────
+function renderLogin() {
+  return `<div class="login-container"><div class="login-box fade-in">
+    <div style="text-align:center;margin-bottom:20px"><div style="width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:inline-flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;margin-bottom:12px">C</div></div>
+    <h2>Welcome to ${appConfig.hospital_name}</h2>
+    <p class="subtitle">AI-Powered Electronic Medical Records</p>
+    <div id="login-error" class="login-error"></div>
+    <form id="login-form">
+      <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="login-user" placeholder="admin" autocomplete="username" required></div>
+      <div class="form-group"><label class="form-label">Password</label><input class="form-input" id="login-pass" type="password" placeholder="••••••" autocomplete="current-password" required></div>
+      <button class="btn btn-primary" type="submit" style="width:100%;justify-content:center;padding:13px" id="login-btn">Sign In</button>
+    </form>
+    <p style="text-align:center;margin-top:16px;font-size:.78rem;color:var(--text-muted)">Default: admin / admin &nbsp;•&nbsp; dr-shivani / Coronasafe@123</p>
+  </div></div>`;
+}
+
+function bindLogin() {
+  const form = document.getElementById('login-form');
+  if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('login-btn');
+    const errEl = document.getElementById('login-error');
+    btn.innerHTML = '<span class="spinner"></span> Signing in...'; btn.disabled = true;
+    errEl.style.display = 'none';
+    try {
+      await login(document.getElementById('login-user').value, document.getElementById('login-pass').value);
+    } catch(err) {
+      errEl.textContent = err.message; errEl.style.display = 'block';
+      btn.innerHTML = 'Sign In'; btn.disabled = false;
+    }
+  };
+}
+
+// ─── Sidebar ─────────────────────────────────────
+function renderSidebar() {
+  const navItems = [
+    {id:'dashboard',icon:'📊',label:'Dashboard'},
+    {id:'medgemma',icon:'🧬',label:'MedGemma AI'},
+    {id:'patients',icon:'👥',label:'Patients'},
+    {id:'consent',icon:'🔐',label:'Consent'},
+    {id:'audit',icon:'📋',label:'Audit Log'},
+  ];
+  return `<nav class="sidebar" id="sidebar">
+    <div class="sidebar-logo"><div class="logo-icon">C</div><h1>${appConfig.hospital_name}</h1></div>
+    <div class="sidebar-nav">${navItems.map(n=>`<div class="nav-item${currentPage===n.id?' active':''}" data-page="${n.id}"><span class="icon">${n.icon}</span>${n.label}</div>`).join('')}</div>
+    <div class="sidebar-footer"><div class="user-badge">
+      <div class="user-avatar">${(currentUser?.first_name||'U')[0]}</div>
+      <div class="user-info"><div class="name">${currentUser?.first_name||''} ${currentUser?.last_name||''}</div><div class="role">${currentUser?.user_type||''}</div></div>
+      <button class="btn-logout" onclick="logout()" title="Sign out">✕</button>
+    </div></div>
+  </nav>`;
+}
+
+function bindSidebar() {
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.onclick = () => navigateTo(el.dataset.page);
+  });
+}
+
+function navigateTo(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page===page));
+  const main = document.getElementById('main-content');
+  if (!main) return;
+  const pages = { dashboard: renderDashboard, medgemma: renderMedGemma, patients: renderPatients, consent: renderConsent, audit: renderAudit };
+  (pages[page] || renderDashboard)(main);
+}
+
+// ─── Dashboard Page ─────────────────────────────────────
+async function renderDashboard(el) {
+  el.innerHTML = `<div class="page-header"><h2>Dashboard</h2><p>Welcome back, ${currentUser?.first_name || 'Doctor'}</p></div>
+    <div class="stats-grid">
+      <div class="stat-card purple"><div class="stat-value">1</div><div class="stat-label">Patients</div></div>
+      <div class="stat-card green"><div class="stat-value">3</div><div class="stat-label">Facilities</div></div>
+      <div class="stat-card amber"><div class="stat-value">27</div><div class="stat-label">Reports Uploaded</div></div>
+      <div class="stat-card blue"><div class="stat-value">9</div><div class="stat-label">Analysis Types</div></div>
+    </div>
+    <div class="card"><div class="card-header"><h3 class="card-title">🧬 Quick Actions</h3></div>
+      <p style="color:var(--text-secondary);margin-bottom:16px">Run MedGemma AI analysis on patient records</p>
+      <button class="btn btn-primary" onclick="navigateTo('medgemma')">Open MedGemma AI →</button>
+    </div>`;
+}
+
+// ─── MedGemma Page ─────────────────────────────────────
+async function renderMedGemma(el) {
+  const presets = [
+    {key:'comprehensive',icon:'📋',label:'Comprehensive',desc:'Full clinical analysis with ICD codes & care plan',color:'from-blue-500'},
+    {key:'summary',icon:'⚡',label:'Quick Summary',desc:'Fast high-level overview of patient status',color:'from-emerald-500'},
+    {key:'critical',icon:'🚨',label:'Critical Alerts',desc:'Red flags, contraindications & emergency plan',color:'from-red-500'},
+    {key:'timeline',icon:'📅',label:'Timeline',desc:'Chronological medical history extraction',color:'from-amber-500'},
+  ];
+  const analysisTypes = [
+    {value:'report_summary',label:'Report Summary'},{value:'trend_analysis',label:'Trend Analysis'},
+    {value:'ddi_check',label:'Drug Interaction Check'},{value:'differential_diagnosis',label:'Differential Diagnosis'},
+    {value:'soap_autofill',label:'SOAP Note Autofill'},{value:'comprehensive',label:'Comprehensive Analysis'},
+    {value:'summary',label:'Clinical Summary'},{value:'critical',label:'Critical Flags'},{value:'timeline',label:'Medical Timeline'},
+  ];
+  el.innerHTML = `<div class="page-header"><h2>🧬 MedGemma AI Analysis</h2><p>AI-powered clinical analysis of patient records</p></div>
+    <div class="card fade-in" style="margin-bottom:24px">
+      <div class="card-header"><h3 class="card-title">New Analysis</h3></div>
+      <div class="form-group"><label class="form-label">Patient ABHA ID</label><input class="form-input" id="mg-patient" placeholder="91-1234-5678-9012" value="91-1234-5678-9012"></div>
+      <label class="form-label">Select Preset</label>
+      <div class="preset-grid" id="preset-grid">${presets.map(p=>`<div class="preset-card" data-preset="${p.key}"><div class="preset-icon">${p.icon}</div><div class="preset-name">${p.label}</div><div class="preset-desc">${p.desc}</div></div>`).join('')}</div>
+      <details style="margin-bottom:16px"><summary style="color:var(--text-muted);cursor:pointer;font-size:.85rem">Advanced Options</summary>
+        <div style="margin-top:12px">
+          <div class="form-group"><label class="form-label">Analysis Type</label><select class="form-select" id="mg-type">${analysisTypes.map(t=>`<option value="${t.value}">${t.label}</option>`).join('')}</select></div>
+          <div class="form-group"><label class="form-label">Encounter ID (optional)</label><input class="form-input" id="mg-encounter" placeholder=""></div>
+        </div>
+      </details>
+      <button class="btn btn-primary" id="mg-run" onclick="runAnalysis()">🧬 Run Analysis</button>
+    </div>
+    <div id="mg-result"></div>
+    <div id="mg-history"></div>`;
+  // Preset selection
+  let selectedPreset = '';
+  document.querySelectorAll('.preset-card').forEach(card => {
+    card.onclick = () => {
+      document.querySelectorAll('.preset-card').forEach(c=>c.classList.remove('selected'));
+      card.classList.add('selected');
+      selectedPreset = card.dataset.preset;
+      window._selectedPreset = selectedPreset;
+    };
+  });
+  window._selectedPreset = '';
+  loadAnalysisHistory();
+}
+
+async function runAnalysis() {
+  const btn = document.getElementById('mg-run');
+  const resultEl = document.getElementById('mg-result');
+  btn.innerHTML = '<span class="spinner"></span> Analyzing...'; btn.disabled = true;
+  resultEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)"><div class="spinner" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px"></div><p>Running AI analysis on patient records...</p></div>';
+  try {
+    const body = {
+      analysis_type: document.getElementById('mg-type')?.value || 'comprehensive',
+      patient_id: document.getElementById('mg-patient')?.value || '',
+      preset: window._selectedPreset || '',
+      encounter_id: document.getElementById('mg-encounter')?.value || '',
+      input_data: {},
+    };
+    const data = await api('/api/v1/medgemma/analyze/', { method:'POST', body });
+    resultEl.innerHTML = renderAnalysisResult(data);
+    toast('Analysis completed successfully!');
+    loadAnalysisHistory();
+  } catch(err) {
+    resultEl.innerHTML = `<div class="card" style="border-color:rgba(239,68,68,.3)"><p style="color:var(--danger)">❌ ${err.message}</p></div>`;
+    toast(err.message, 'error');
+  }
+  btn.innerHTML = '🧬 Run Analysis'; btn.disabled = false;
+}
+
+function renderAnalysisResult(data) {
+  const r = data.analysis_result || {};
+  let html = `<div class="card fade-in" style="margin-bottom:24px">
+    <div class="card-header"><h3 class="card-title">✅ Analysis Results</h3>
+      <div><span class="badge badge-info">${data.analysis_type}</span> <span class="badge badge-neutral">${r.processing_time_ms||0}ms</span></div>
+    </div>`;
+  // Summary
+  if (r.summary) html += `<div class="result-section"><h3>📝 Summary</h3><div class="result-summary">${r.summary}</div></div>`;
+  // Flags
+  if (r.flags?.length) html += `<div class="result-section"><h3>🚩 Flags</h3><div class="flags-list">${r.flags.map(f=>`<span class="badge badge-warning">${f}</span>`).join('')}</div></div>`;
+  // Key findings
+  if (r.key_findings?.length) {
+    html += `<div class="result-section"><h3>🔬 Key Findings</h3><div class="table-wrap"><table><thead><tr><th>Parameter</th><th>Value</th><th>Status</th><th>Reference</th></tr></thead><tbody>`;
+    r.key_findings.forEach(f => {
+      const badge = f.status==='HIGH'?'danger':f.status==='LOW'?'warning':'success';
+      html += `<tr><td style="font-weight:600">${f.parameter}</td><td>${f.value}</td><td><span class="badge badge-${badge}">${f.status}</span></td><td style="color:var(--text-muted)">${f.reference}</td></tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  // Trends
+  if (r.trends?.length) {
+    html += `<div class="result-section"><h3>📈 Trends</h3>`;
+    r.trends.forEach(t => {
+      const badge = t.severity==='CONCERNING'?'danger':t.severity==='IMPROVING'?'success':'info';
+      html += `<div style="margin-bottom:14px;padding:12px;border-radius:8px;background:var(--bg-glass)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong>${t.parameter}</strong><span class="badge badge-${badge}">${t.direction} • ${t.severity}</span></div>
+        <div style="display:flex;gap:16px;font-size:.82rem;color:var(--text-muted)">${(t.data_points||[]).map(d=>`<span>${d.date}: <strong style="color:var(--text-primary)">${d.value}</strong></span>`).join('')}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  // SOAP
+  if (r.soap) {
+    html += `<div class="result-section"><h3>📝 SOAP Note</h3>`;
+    ['subjective','objective','assessment','plan'].forEach(s => {
+      if (r.soap[s]) html += `<div style="margin-bottom:14px"><strong style="text-transform:uppercase;font-size:.78rem;color:var(--accent);letter-spacing:.5px">${s}</strong><p style="margin-top:6px;font-size:.88rem;color:var(--text-secondary);line-height:1.6;white-space:pre-wrap">${r.soap[s]}</p></div>`;
+    });
+    html += `</div>`;
+  }
+  // Interactions
+  if (r.interactions?.length) {
+    html += `<div class="result-section"><h3>💊 Drug Interactions</h3><div class="table-wrap"><table><thead><tr><th>Drug A</th><th>Drug B</th><th>Severity</th><th>Recommendation</th></tr></thead><tbody>`;
+    r.interactions.forEach(i => {
+      const badge = i.severity==='SEVERE'?'danger':i.severity==='MODERATE'?'warning':'info';
+      html += `<tr><td>${i.drug_a}</td><td>${i.drug_b}</td><td><span class="badge badge-${badge}">${i.severity}</span></td><td style="color:var(--text-muted);font-size:.82rem">${i.recommendation}</td></tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  // Allergy alerts
+  if (r.allergy_alerts?.length) {
+    html += `<div class="result-section" style="border-color:rgba(239,68,68,.2)"><h3>⚠️ Allergy Alerts</h3>`;
+    r.allergy_alerts.forEach(a => {
+      html += `<div style="padding:12px;border-radius:8px;background:rgba(239,68,68,.05);margin-bottom:8px">
+        <strong style="color:var(--danger)">${a.allergen}</strong> — ${a.reaction}
+        <div style="margin-top:6px;font-size:.82rem;color:var(--text-muted)"><strong>Avoid:</strong> ${a.avoid.join(', ')}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  // Differentials
+  if (r.differentials?.length) {
+    html += `<div class="result-section"><h3>🔍 Differential Diagnosis</h3><div class="table-wrap"><table><thead><tr><th>Condition</th><th>Probability</th><th>Evidence</th><th>Recommended Tests</th></tr></thead><tbody>`;
+    r.differentials.forEach(d => {
+      const badge = d.probability==='HIGH'?'danger':d.probability==='MODERATE'?'warning':'info';
+      html += `<tr><td style="font-weight:600">${d.condition}</td><td><span class="badge badge-${badge}">${d.probability}</span></td><td style="font-size:.82rem;color:var(--text-muted)">${d.supporting_evidence.join(', ')}</td><td style="font-size:.82rem;color:var(--text-muted)">${d.recommended_tests.join(', ')}</td></tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  // Suggested questions
+  if (r.suggested_questions?.length) {
+    html += `<div class="result-section"><h3>❓ Suggested Questions</h3><ul style="list-style:none;padding:0">`;
+    r.suggested_questions.forEach(q => html += `<li style="padding:8px 0;border-bottom:1px solid var(--border);font-size:.88rem;color:var(--text-secondary)">→ ${q}</li>`);
+    html += `</ul></div>`;
+  }
+  // Disclaimer
+  html += `<div style="padding:12px 16px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.15);font-size:.8rem;color:var(--warning)">
+    ⚠️ ${r.disclaimer||'AI-generated suggestion. Verify clinically.'} ${r.is_mock?'<span class="badge badge-neutral" style="margin-left:8px">MOCK MODE</span>':''}
+  </div>`;
+  html += `</div>`;
+  return html;
+}
+
+async function loadAnalysisHistory() {
+  const el = document.getElementById('mg-history');
+  if (!el) return;
+  try {
+    const data = await api('/api/v1/medgemma/?limit=10');
+    if (!data.results?.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card fade-in"><div class="card-header"><h3 class="card-title">📜 Recent Analyses</h3></div>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Status</th><th>Time</th></tr></thead><tbody>
+      ${data.results.map(r=>`<tr><td>${new Date(r.created_date).toLocaleString()}</td><td><span class="badge badge-info">${r.analysis_type}</span></td><td><span class="badge badge-success">${r.status}</span></td><td>${r.processing_time_ms||0}ms</td></tr>`).join('')}
+      </tbody></table></div></div>`;
+  } catch(e) { el.innerHTML = ''; }
+}
+
+// ─── Patients Page ─────────────────────────────────────
+async function renderPatients(el) {
+  el.innerHTML = `<div class="page-header"><h2>👥 Patients</h2><p>Patient records in the system</p></div><div id="patients-list"><div style="text-align:center;padding:40px"><span class="spinner"></span></div></div>`;
+  try {
+    const data = await api('/api/v1/patient/');
+    const list = document.getElementById('patients-list');
+    if (!data.results?.length) { list.innerHTML = '<div class="empty-state"><div class="icon">👥</div><h3>No patients found</h3></div>'; return; }
+    list.innerHTML = `<div class="card fade-in"><div class="table-wrap"><table><thead><tr><th>Name</th><th>ABHA ID</th><th>Gender</th><th>DOB</th><th>Blood Group</th></tr></thead><tbody>
+      ${data.results.map(p=>`<tr><td style="font-weight:600">${p.name}</td><td><code style="background:var(--bg-glass);padding:2px 8px;border-radius:4px;font-size:.82rem">${p.meta?.abha_id||'—'}</code></td><td>${p.gender}</td><td>${p.date_of_birth||'—'}</td><td><span class="badge badge-info">${p.blood_group||'—'}</span></td></tr>`).join('')}
+    </tbody></table></div></div>`;
+  } catch(err) { document.getElementById('patients-list').innerHTML = `<div class="card" style="border-color:rgba(239,68,68,.3)"><p style="color:var(--danger)">Error: ${err.message}</p></div>`; }
+}
+
+// ─── Consent Page ─────────────────────────────────────
+async function renderConsent(el) {
+  el.innerHTML = `<div class="page-header"><h2>🔐 Consent Management</h2><p>DEPA-compliant patient consent artifacts</p></div>
+    <div class="card fade-in" style="margin-bottom:24px"><div class="card-header"><h3 class="card-title">Grant New Consent</h3></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-group"><label class="form-label">Patient ABHA ID</label><input class="form-input" id="c-abha" value="91-1234-5678-9012"></div>
+        <div class="form-group"><label class="form-label">Requester ID</label><input class="form-input" id="c-req" value="${currentUser?.external_id||''}"></div>
+        <div class="form-group"><label class="form-label">Purpose</label><select class="form-select" id="c-purpose"><option>diagnosis</option><option>second_opinion</option><option>research</option><option>follow_up</option></select></div>
+        <div class="form-group"><label class="form-label">Valid Until</label><input class="form-input" id="c-until" type="datetime-local" value="${new Date(Date.now()+86400000).toISOString().slice(0,16)}"></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="grantConsent()">🔐 Grant Consent</button>
+    </div>
+    <div id="consent-list"><div style="text-align:center;padding:40px"><span class="spinner"></span></div></div>`;
+  loadConsents();
+}
+
+async function grantConsent() {
+  try {
+    await api('/api/v1/consent/grant/', { method:'POST', body: {
+      patient_abha_id: document.getElementById('c-abha').value,
+      requester_id: document.getElementById('c-req').value,
+      requester_type: 'doctor',
+      purpose: document.getElementById('c-purpose').value,
+      scope: ['Patient','Observation','DiagnosticReport','Condition','MedicationRequest'],
+      valid_until: new Date(document.getElementById('c-until').value).toISOString(),
+    }});
+    toast('Consent granted!');
+    loadConsents();
+  } catch(err) { toast(err.message,'error'); }
+}
+
+async function revokeConsent(id) {
+  try {
+    await api(`/api/v1/consent/${id}/revoke/`, { method:'POST', body: {reason:'Revoked via UI'} });
+    toast('Consent revoked');
+    loadConsents();
+  } catch(err) { toast(err.message,'error'); }
+}
+
+async function loadConsents() {
+  const el = document.getElementById('consent-list');
+  if (!el) return;
+  try {
+    const data = await api('/api/v1/consent/');
+    if (!data.results?.length) { el.innerHTML = '<div class="card"><div class="empty-state"><div class="icon">🔐</div><h3>No consent records</h3><p>Grant a consent above to get started</p></div></div>'; return; }
+    el.innerHTML = `<div class="card fade-in"><div class="card-header"><h3 class="card-title">Consent Records</h3></div><div class="table-wrap"><table><thead><tr><th>Patient</th><th>Purpose</th><th>Status</th><th>Granted</th><th>Valid Until</th><th>Action</th></tr></thead><tbody>
+      ${data.results.map(c=>{
+        const badge = c.status==='ACTIVE'?'success':c.status==='REVOKED'?'danger':'warning';
+        return `<tr><td><code style="font-size:.8rem">${c.patient_abha_id}</code></td><td>${c.purpose}</td><td><span class="badge badge-${badge}">${c.status}</span></td><td style="font-size:.82rem">${c.granted_at?new Date(c.granted_at).toLocaleDateString():''}</td><td style="font-size:.82rem">${c.valid_until?new Date(c.valid_until).toLocaleDateString():''}</td><td>${c.status==='ACTIVE'?`<button class="btn btn-danger btn-sm" onclick="revokeConsent('${c.external_id}')">Revoke</button>`:''}</td></tr>`;
+      }).join('')}
+    </tbody></table></div></div>`;
+  } catch(err) { el.innerHTML = `<div class="card"><p style="color:var(--danger)">Error: ${err.message}</p></div>`; }
+}
+
+// ─── Audit Log Page ─────────────────────────────────────
+async function renderAudit(el) {
+  el.innerHTML = `<div class="page-header"><h2>📋 Audit Log</h2><p>Cryptographic hash-chained audit trail</p></div>
+    <div style="margin-bottom:20px"><button class="btn btn-outline btn-sm" onclick="verifyChain()">🔗 Verify Hash Chain</button></div>
+    <div id="chain-result"></div>
+    <div id="audit-list"><div style="text-align:center;padding:40px"><span class="spinner"></span></div></div>`;
+  loadAuditLogs();
+}
+
+async function verifyChain() {
+  const el = document.getElementById('chain-result');
+  try {
+    const data = await api('/api/v1/audit/verify_chain/');
+    const ok = data.chain_intact;
+    el.innerHTML = `<div class="card fade-in" style="margin-bottom:20px;border-color:${ok?'rgba(16,185,129,.3)':'rgba(239,68,68,.3)'}">
+      <div style="display:flex;align-items:center;gap:12px"><span style="font-size:1.5rem">${ok?'✅':'❌'}</span><div><strong>${ok?'Chain Intact':'Chain Broken!'}</strong><p style="font-size:.85rem;color:var(--text-muted)">${data.verified_entries}/${data.total_entries} entries verified</p></div></div>
+    </div>`;
+  } catch(err) { el.innerHTML = `<p style="color:var(--danger)">${err.message}</p>`; }
+}
+
+async function loadAuditLogs() {
+  const el = document.getElementById('audit-list');
+  if (!el) return;
+  try {
+    const data = await api('/api/v1/audit/?limit=30');
+    if (!data.results?.length) { el.innerHTML = '<div class="card"><div class="empty-state"><div class="icon">📋</div><h3>No audit entries</h3></div></div>'; return; }
+    el.innerHTML = `<div class="card fade-in"><div class="table-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Patient</th><th>Hash</th></tr></thead><tbody>
+      ${data.results.map(a=>`<tr><td style="font-size:.8rem;white-space:nowrap">${new Date(a.timestamp).toLocaleString()}</td><td><span class="badge badge-info">${a.event_type}</span></td><td style="font-size:.8rem">${a.actor_id?.slice(0,8)||'—'}...</td><td style="font-size:.8rem">${a.patient_id?.slice(0,8)||'—'}...</td><td><code style="font-size:.7rem;color:var(--text-muted)">${a.entry_hash?.slice(0,12)}...</code></td></tr>`).join('')}
+    </tbody></table></div></div>`;
+  } catch(err) { el.innerHTML = `<div class="card"><p style="color:var(--danger)">Error: ${err.message}</p></div>`; }
+}
+
+// ─── Init ─────────────────────────────────────
+(async function init() {
+  try {
+    appConfig = await api('/api/v1/config/', {noAuth:true}) || appConfig;
+    if (appConfig.hospital_id === 'HOSP-CITYCARE-A') {
+      document.documentElement.style.setProperty('--accent', '#3b82f6');
+      document.documentElement.style.setProperty('--accent-glow', 'rgba(59,130,246,.25)');
+    } else if (appConfig.hospital_id === 'HOSP-METRO-B') {
+      document.documentElement.style.setProperty('--accent', '#14b8a6');
+      document.documentElement.style.setProperty('--accent-glow', 'rgba(20,184,166,.25)');
+    }
+    document.title = appConfig.hospital_name + " — AI-Powered Healthcare";
+  } catch(e) {}
+
+  if (storage.token) {
+    try { currentUser = await api('/api/v1/users/me/'); } catch(e) { storage.token = null; storage.refresh = null; }
+  }
+  render();
+})();
+</script>
+</body>
+</html>

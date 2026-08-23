@@ -1,0 +1,25 @@
+version: "3.8"
+
+# Hospital A — CityCare Multispeciality Hospital (Primary)
+# Deploy on PC-1 / internal network 1
+
+services:
+  care-hospital-a:
+    build:
+      context: ../../care_be
+      dockerfile: Dockerfile
+    container_name: hospital-a-backend
+    ports:
+      - "9001:9000"
+      - "4001:9000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HOSPITAL_ID=HOSP-CITYCARE-A
+      - HOSPITAL_NAME=CityCare Multispeciality Hospital
+      - UHI_SWITCH_URL=http://host.docker.internal:8080
+    volumes:
+      - ./data:/app/data
+      - ../../care_fe:/care_fe
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
