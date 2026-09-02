@@ -14,7 +14,13 @@ if [ ! -d ".venv" ]; then
     python3 -m venv .venv
 fi
 source .venv/bin/activate
-export HF_TOKEN="your_huggingface_token_here"
+
+# Load environment variables from .env
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+export HF_TOKEN="${HF_TOKEN:-}" # Token should be provided via environment variable, do not hardcode
 
 # Install dependencies
 pip install -r requirements.txt 2>/dev/null || pip3 install -r requirements.txt

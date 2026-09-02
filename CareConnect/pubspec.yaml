@@ -88,6 +88,7 @@ dependencies:
   crypto: ^3.0.7
   pdf: ^3.11.3
   cunning_document_scanner: ^1.4.0
+  web_socket_channel: ^3.0.3
 dev_dependencies:
   flutter_test:
     sdk: flutter

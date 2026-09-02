@@ -8,8 +8,8 @@ def register():
     cursor = conn.cursor()
 
     hospitals = [
-        ("HOSP-CITYCARE-A", "CityCare Multispeciality Hospital", "http://localhost:9001", "Chennai", "Tamil Nadu"),
-        ("HOSP-METRO-B", "Metro Radiology & Diagnostics Center", "http://localhost:9002", "Mumbai", "Maharashtra")
+        ("HOSP-001", "CityCare Multispeciality Hospital", "http://localhost:9001", "Chennai", "Tamil Nadu"),
+        ("HOSP-002", "Metro Radiology & Diagnostics Center", "http://localhost:9002", "Mumbai", "Maharashtra")
     ]
 
     for h_id, name, url, city, state in hospitals:

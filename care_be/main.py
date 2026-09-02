@@ -15,6 +15,7 @@ Start: uvicorn main:app --host 0.0.0.0 --port 9000 --reload
 import hashlib
 import json
 import os
+import random
 import sqlite3
 import time
 import uuid
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 import jwt
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,8 +39,10 @@ JWT_SECRET = "care-lightweight-secret-key-change-in-production"
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL = timedelta(minutes=60)
 REFRESH_TOKEN_TTL = timedelta(hours=24)
-DB_PATH = os.path.join(os.path.dirname(__file__), "care_lite.db")
 UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+# Get Hospital ID for DB isolation
+_hosp_id = os.environ.get("HOSPITAL_ID", "HOSP-001").lower()
+DB_PATH = os.path.join(os.path.dirname(__file__), f"care_lite_{_hosp_id}.db")
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "care_fe")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -106,6 +109,91 @@ def init_db():
             entry_hash TEXT,
             metadata TEXT DEFAULT '{}',
             timestamp TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS encounters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT UNIQUE NOT NULL,
+            patient_id TEXT NOT NULL,
+            doctor_id TEXT NOT NULL,
+            facility_id TEXT DEFAULT '',
+            encounter_type TEXT DEFAULT 'outpatient',
+            status TEXT DEFAULT 'in-progress',
+            chief_complaint TEXT DEFAULT '',
+            vitals TEXT DEFAULT '{}',
+            examination TEXT DEFAULT '',
+            diagnosis TEXT DEFAULT '[]',
+            plan TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_date TEXT NOT NULL,
+            updated_date TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS diagnostic_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT UNIQUE NOT NULL,
+            encounter_id TEXT,
+            patient_id TEXT NOT NULL,
+            doctor_id TEXT NOT NULL,
+            report_type TEXT DEFAULT 'clinical',
+            title TEXT NOT NULL,
+            category TEXT DEFAULT 'General',
+            findings TEXT DEFAULT '',
+            impression TEXT DEFAULT '',
+            recommendations TEXT DEFAULT '',
+            icd_codes TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'final',
+            created_date TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS prescriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT UNIQUE NOT NULL,
+            encounter_id TEXT,
+            patient_id TEXT NOT NULL,
+            doctor_id TEXT NOT NULL,
+            medication TEXT NOT NULL,
+            dosage TEXT DEFAULT '',
+            frequency TEXT DEFAULT '',
+            duration TEXT DEFAULT '',
+            route TEXT DEFAULT 'oral',
+            instructions TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            created_date TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS lab_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT UNIQUE NOT NULL,
+            encounter_id TEXT,
+            patient_id TEXT NOT NULL,
+            ordered_by TEXT NOT NULL,
+            panel_name TEXT NOT NULL,
+            results TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'final',
+            notes TEXT DEFAULT '',
+            created_date TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT UNIQUE NOT NULL,
+            session_id TEXT NOT NULL,
+            patient_id TEXT DEFAULT '',
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_date TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS document_references (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT UNIQUE NOT NULL,
+            patient_id TEXT NOT NULL,
+            doctor_id TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            created_date TEXT NOT NULL
         );
     """)
     conn.close()
@@ -237,6 +325,58 @@ class EmergencyAccessRequest(BaseModel):
     patient_abha_id: str
     hospital_id: str = ""
     reason: str
+
+class EncounterRequest(BaseModel):
+    patient_id: str
+    encounter_type: str = "outpatient"
+    chief_complaint: str = ""
+    vitals: Optional[dict] = {}
+    examination: str = ""
+    diagnosis: Optional[list] = []
+    plan: str = ""
+    notes: str = ""
+
+class DiagnosticReportRequest(BaseModel):
+    patient_id: str
+    encounter_id: Optional[str] = ""
+    report_type: str = "clinical"
+    title: str
+    category: str = "General"
+    findings: str = ""
+    impression: str = ""
+    recommendations: str = ""
+    icd_codes: Optional[list] = []
+
+class PrescriptionRequest(BaseModel):
+    patient_id: str
+    encounter_id: Optional[str] = ""
+    medication: str
+    dosage: str = ""
+    frequency: str = ""
+    duration: str = ""
+    route: str = "oral"
+    instructions: str = ""
+
+class LabResultRequest(BaseModel):
+    patient_id: str
+    encounter_id: Optional[str] = ""
+    panel_name: str
+    results: Optional[list] = []
+    notes: str = ""
+
+class ChatRequest(BaseModel):
+    message: str
+    patient_id: Optional[str] = ""
+    session_id: Optional[str] = ""
+
+class PatientCreateRequest(BaseModel):
+    name: str
+    gender: str = "male"
+    blood_group: str = ""
+    date_of_birth: str = ""
+    phone_number: str = ""
+    address: str = ""
+    abha_id: str = ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -392,6 +532,7 @@ def run_analysis(req: MedGemmaRequest, request: Request,
                 break
 
         if patient:
+            pid = patient["external_id"]
             input_data["patient_info"] = {
                 "name": patient["name"],
                 "gender": patient["gender"],
@@ -402,6 +543,66 @@ def run_analysis(req: MedGemmaRequest, request: Request,
             }
             input_data["patient_id"] = patient_id_str
             input_data["abha_id"] = patient["meta"].get("abha_id", "")
+
+            # ── Fetch FULL clinical data for AI analysis ──
+            encounters = conn.execute(
+                "SELECT chief_complaint, diagnosis, vitals, examination, plan, notes, status, created_date FROM encounters WHERE patient_id=? ORDER BY created_date DESC LIMIT 10",
+                (pid,)).fetchall()
+            input_data["encounters"] = [{
+                "chief_complaint": e["chief_complaint"],
+                "diagnosis": json.loads(e["diagnosis"] or "[]"),
+                "vitals": json.loads(e["vitals"] or "{}"),
+                "examination": e["examination"],
+                "plan": e["plan"],
+                "notes": e["notes"],
+                "status": e["status"],
+                "date": e["created_date"],
+            } for e in encounters]
+
+            reports = conn.execute(
+                "SELECT title, findings, impression, recommendations, icd_codes, status, created_date FROM diagnostic_reports WHERE patient_id=? ORDER BY created_date DESC LIMIT 10",
+                (pid,)).fetchall()
+            input_data["diagnostic_reports"] = [{
+                "title": r["title"],
+                "findings": r["findings"][:500] if r["findings"] else "",
+                "impression": r["impression"],
+                "recommendations": r["recommendations"],
+                "icd_codes": json.loads(r["icd_codes"] or "[]"),
+                "status": r["status"],
+                "date": r["created_date"],
+            } for r in reports]
+
+            prescriptions = conn.execute(
+                "SELECT medication, dosage, frequency, duration, instructions, status, created_date FROM prescriptions WHERE patient_id=? ORDER BY created_date DESC LIMIT 10",
+                (pid,)).fetchall()
+            input_data["prescriptions"] = [dict(p) for p in prescriptions]
+
+            labs = conn.execute(
+                "SELECT panel_name, results, status, created_date FROM lab_results WHERE patient_id=? ORDER BY created_date DESC LIMIT 10",
+                (pid,)).fetchall()
+            input_data["lab_results"] = [{
+                "panel_name": l["panel_name"],
+                "results": json.loads(l["results"] or "[]"),
+                "status": l["status"],
+                "date": l["created_date"],
+            } for l in labs]
+
+            # ── Also pull UHI cross-hospital records if consent exists ──
+            try:
+                import requests as req_lib
+                uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
+                abha = patient["meta"].get("abha_id", "")
+                hospital_id = os.environ.get("HOSPITAL_ID", "HOSP-001")
+                cr = req_lib.get(f"{uhi_url}/app/patient/{abha}/consents", timeout=3)
+                if cr.status_code == 200:
+                    for c in cr.json().get("consents", []):
+                        if c.get("hospital_id") == hospital_id and c.get("status") == "GRANTED":
+                            rr = req_lib.get(f"{uhi_url}/app/patient/{abha}/records", timeout=3)
+                            if rr.status_code == 200:
+                                input_data["uhi_cross_hospital_records"] = rr.json()
+                            break
+            except Exception:
+                pass
 
     # Use preset as analysis_type override if provided
     analysis_type = req.preset if req.preset else req.analysis_type
@@ -560,6 +761,30 @@ def list_consents(request: Request, patient_abha_id: str = "",
             "status": r["status"],
             "consent_token": r["consent_token"],
         })
+        
+    # Fetch UHI network consents for the current hospital
+    hospital_id = os.environ.get("HOSPITAL_ID", "HOSP-001")
+    uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
+    try:
+        import requests as req_lib
+        abha_to_fetch = patient_abha_id or "91-1234-5678-9012"
+        resp = req_lib.get(f"{uhi_url}/app/patient/{abha_to_fetch}/consents", timeout=3)
+        if resp.status_code == 200:
+            uhi_data = resp.json().get("consents", [])
+            for c in uhi_data:
+                if c.get("hospital_id") == hospital_id:
+                    results.append({
+                        "external_id": c.get("consent_id"),
+                        "patient_abha_id": abha_to_fetch,
+                        "requester_id": "patient",
+                        "purpose": c.get("purpose", "Clinical Diagnosis"),
+                        "status": c.get("status"),
+                        "valid_until": c.get("expires_at"),
+                        "granted_at": c.get("granted_at"),
+                    })
+    except Exception as e:
+        print(f"Failed to fetch UHI consents: {e}")
+
     return {"count": len(results), "results": results}
 
 
@@ -732,6 +957,632 @@ def emergency_access(req: EmergencyAccessRequest, request: Request,
             "will trigger a security review."
         ),
         "notifications_sent": {"sms": "queued", "email": "queued", "push": "queued"},
+    }
+
+
+# ─── File Upload (static serving) ─────────────────────────
+
+# ─── Patient CRUD ─────────────────────────────────────────────
+
+@app.post("/api/v1/patient/")
+def create_patient(req: PatientCreateRequest, request: Request):
+    user = get_current_user(request)
+    new_id = len(PATIENTS) + 1
+    ext_id = str(uuid.uuid4())
+    abha = req.abha_id or f"91-{random.randint(1000,9999)}-{random.randint(1000,9999)}-{random.randint(1000,9999)}"
+    patient = {
+        "id": new_id,
+        "external_id": ext_id,
+        "name": req.name,
+        "gender": req.gender,
+        "blood_group": req.blood_group,
+        "date_of_birth": req.date_of_birth,
+        "phone_number": req.phone_number,
+        "address": req.address,
+        "meta": {"abha_id": abha},
+        "created_date": datetime.now(timezone.utc).isoformat(),
+    }
+    PATIENTS.append(patient)
+    return patient
+
+
+@app.get("/api/v1/patient/{patient_id}/detail/")
+def get_patient_detail(patient_id: str, request: Request,
+                       conn: sqlite3.Connection = Depends(get_db)):
+    """Full patient detail: profile + encounters + reports + prescriptions + labs."""
+    user = get_current_user(request)
+    patient = None
+    for p in PATIENTS:
+        if p["external_id"] == patient_id or str(p["id"]) == patient_id:
+            patient = p
+            break
+        if p["meta"].get("abha_id") == patient_id:
+            patient = p
+            break
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    pid = patient["external_id"]
+
+    encounters = conn.execute(
+        "SELECT * FROM encounters WHERE patient_id=? ORDER BY created_date DESC", (pid,)
+    ).fetchall()
+
+    reports = conn.execute(
+        "SELECT * FROM diagnostic_reports WHERE patient_id=? ORDER BY created_date DESC", (pid,)
+    ).fetchall()
+
+    prescriptions = conn.execute(
+        "SELECT * FROM prescriptions WHERE patient_id=? ORDER BY created_date DESC", (pid,)
+    ).fetchall()
+
+    labs = conn.execute(
+        "SELECT * FROM lab_results WHERE patient_id=? ORDER BY created_date DESC", (pid,)
+    ).fetchall()
+
+    enc_list = [{**dict(e), "diagnosis": json.loads(e["diagnosis"] or "[]"), "vitals": json.loads(e["vitals"] or "{}")} for e in encounters]
+    rep_list = [{**dict(r), "icd_codes": json.loads(r["icd_codes"] or "[]")} for r in reports]
+    rx_list = [dict(p) for p in prescriptions]
+    lab_list = [{**dict(l), "results": json.loads(l["results"] or "[]")} for l in labs]
+
+    # Seamlessly Blend UHI Records if Consent is Active
+    hospital_id = os.environ.get("HOSPITAL_ID", "HOSP-001")
+    uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
+    try:
+        import requests as req_lib
+        abha = patient["meta"].get("abha_id", "91-1234-5678-9012")
+        resp = req_lib.get(f"{uhi_url}/app/patient/{abha}/consents", timeout=3)
+        has_consent = False
+        if resp.status_code == 200:
+            for c in resp.json().get("consents", []):
+                if c.get("hospital_id") == hospital_id and c.get("status") == "GRANTED":
+                    has_consent = True
+                    break
+        
+        if has_consent:
+            resp = req_lib.get(f"{uhi_url}/app/patient/{abha}/records", timeout=3)
+            if resp.status_code == 200:
+                uhi_data = resp.json()
+                for r in uhi_data.get("progress_records", []):
+                    enc_list.append({
+                        "id": f"uhi-{uuid.uuid4().hex[:8]}",
+                        "external_id": f"uhi-{uuid.uuid4().hex[:8]}",
+                        "patient_id": pid,
+                        "doctor_id": "UHI Network",
+                        "encounter_type": "Progress Report (UHI)",
+                        "chief_complaint": f"Imported from {r.get('source_hospital')}",
+                        "vitals": json.dumps({"bp": r.get("blood_pressure"), "weight": r.get("weight_kg")}),
+                        "examination": f"Cholesterol: {r.get('total_cholesterol')} | HDL: {r.get('hdl')}",
+                        "diagnosis": [],
+                        "plan": r.get("assessment"),
+                        "notes": f"Medication: {r.get('medication')} | Exercise: {r.get('exercise')}",
+                        "status": "completed",
+                        "created_date": f"2026-01-01T00:00:00Z", # Fallback date
+                        "updated_date": ""
+                    })
+                for r in uhi_data.get("imaging_records", []):
+                    rep_list.append({
+                        "id": f"uhi-{uuid.uuid4().hex[:8]}",
+                        "external_id": f"uhi-{uuid.uuid4().hex[:8]}",
+                        "encounter_id": "",
+                        "patient_id": pid,
+                        "doctor_id": r.get("radiologist", "UHI Network"),
+                        "report_type": r.get("type", "imaging"),
+                        "title": r.get("technique", "Imaging Report"),
+                        "category": "Imaging (UHI)",
+                        "findings": r.get("findings", ""),
+                        "impression": r.get("impression", ""),
+                        "recommendations": r.get("comparison", ""),
+                        "icd_codes": [],
+                        "status": "final",
+                        "created_date": f"2026-01-01T00:00:00Z"
+                    })
+    except Exception as e:
+        print(f"Failed to fetch UHI records for seamless EMR view: {e}")
+
+    # Sort so newest appear first
+    enc_list.sort(key=lambda x: x["created_date"], reverse=True)
+    rep_list.sort(key=lambda x: x["created_date"], reverse=True)
+
+    return {
+        "patient": patient,
+        "encounters": enc_list,
+        "diagnostic_reports": rep_list,
+        "prescriptions": rx_list,
+        "lab_results": lab_list,
+    }
+
+
+import httpx
+
+def _notify_uhi_switch(patient_abha_id: str, resource_type: str, resource_raw: dict):
+    """Notify UHI Switch about new FHIR resources for live sync."""
+    try:
+        # Format as FHIR-like resource to match the app's expectations
+        fhir_resource = {
+            "resourceType": resource_type,
+            "id": resource_raw.get("external_id"),
+            **resource_raw
+        }
+        httpx.post("http://localhost:8080/internal/notify", json={
+            "patient_abha_id": patient_abha_id,
+            "resource_type": resource_type,
+            "resource_raw": fhir_resource
+        }, timeout=2.0)
+    except Exception as e:
+        print(f"Live Sync UHI notify failed: {e}")
+
+# ─── Encounter Endpoints ─────────────────────────────────────
+
+@app.post("/api/v1/encounter/")
+def create_encounter(req: EncounterRequest, request: Request,
+                     conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    ext_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO encounters
+           (external_id, patient_id, doctor_id, encounter_type, chief_complaint,
+            vitals, examination, diagnosis, plan, notes, created_date, updated_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ext_id, req.patient_id, user["external_id"], req.encounter_type,
+         req.chief_complaint, json.dumps(req.vitals or {}), req.examination,
+         json.dumps(req.diagnosis or []), req.plan, req.notes, now, now),
+    )
+    conn.commit()
+    _append_audit(conn, "ENCOUNTER_CREATED", user["external_id"], req.patient_id,
+                  ["Encounter"], metadata={"encounter_id": ext_id})
+    ret = {
+        "external_id": ext_id, "patient_id": req.patient_id,
+        "encounter_type": req.encounter_type, "chief_complaint": req.chief_complaint,
+        "vitals": req.vitals, "examination": req.examination,
+        "diagnosis": req.diagnosis, "plan": req.plan, "notes": req.notes,
+        "status": "in-progress", "created_date": now,
+        "doctor": f"{user['first_name']} {user['last_name']}",
+    }
+    _notify_uhi_switch(req.patient_id, "Encounter", ret)
+    return ret
+
+
+@app.post("/api/v1/patient/{abha_id}/files/")
+def upload_patient_file(abha_id: str, request: Request, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    
+    content = file.file.read()
+    file_size = len(content)
+    
+    doc_ext_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO document_references (external_id, patient_id, doctor_id, file_name, content_type, file_size, created_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (doc_ext_id, abha_id, user["external_id"], file.filename, file.content_type, file_size, now)
+    )
+    conn.commit()
+    
+    doc_ret = {
+        "external_id": doc_ext_id,
+        "patient_id": abha_id,
+        "file_name": file.filename,
+        "content_type": file.content_type,
+        "file_size": file_size,
+        "created_date": now,
+        "doctor": f"{user['first_name']} {user['last_name']}",
+    }
+    _notify_uhi_switch(abha_id, "DocumentReference", doc_ret)
+    
+    import medgemma_ai as medgemma
+    try:
+        text_content = content.decode("utf-8")
+    except:
+        text_content = f"Binary file upload: {file.filename} (Size: {file_size} bytes)"
+    
+    ai_result = medgemma.analyze("soap_autofill", {"document_text": text_content, "patient_id": abha_id})
+    
+    enc_ext_id = str(uuid.uuid4())
+    ai_soap = ai_result.get("summary", "No summary generated.")
+    conn.execute(
+        """INSERT INTO encounters
+           (external_id, patient_id, doctor_id, encounter_type, chief_complaint,
+            vitals, examination, diagnosis, plan, notes, created_date, updated_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (enc_ext_id, abha_id, user["external_id"], "AI Auto-SOAP", "Extracted from file upload",
+         "{}", ai_soap, "[]", "See AI generated plan", "", now, now),
+    )
+    conn.commit()
+    
+    enc_ret = {
+        "external_id": enc_ext_id, "patient_id": abha_id,
+        "encounter_type": "AI Auto-SOAP", "chief_complaint": "Extracted from file upload",
+        "vitals": {}, "examination": ai_soap,
+        "diagnosis": [], "plan": "See AI generated plan", "notes": "",
+        "status": "completed", "created_date": now,
+        "doctor": f"{user['first_name']} {user['last_name']}",
+    }
+    _notify_uhi_switch(abha_id, "Encounter", enc_ret)
+    
+    return {"message": "File uploaded and SOAP note generated successfully", "document": doc_ret, "encounter": enc_ret}
+
+
+@app.get("/api/v1/encounter/")
+def list_encounters(request: Request, patient_id: str = "",
+                    conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    if patient_id:
+        rows = conn.execute(
+            "SELECT * FROM encounters WHERE patient_id=? ORDER BY created_date DESC",
+            (patient_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM encounters ORDER BY created_date DESC LIMIT 50").fetchall()
+    results = []
+    for r in rows:
+        results.append({
+            **dict(r),
+            "vitals": json.loads(r["vitals"] or "{}"),
+            "diagnosis": json.loads(r["diagnosis"] or "[]"),
+        })
+    return {"count": len(results), "results": results}
+
+
+@app.get("/api/v1/encounter/{encounter_id}/")
+def get_encounter(encounter_id: str, request: Request,
+                  conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    r = conn.execute("SELECT * FROM encounters WHERE external_id=?",
+                     (encounter_id,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="Encounter not found")
+    return {
+        **dict(r),
+        "vitals": json.loads(r["vitals"] or "{}"),
+        "diagnosis": json.loads(r["diagnosis"] or "[]"),
+    }
+
+
+@app.put("/api/v1/encounter/{encounter_id}/")
+def update_encounter(encounter_id: str, req: EncounterRequest, request: Request,
+                     conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """UPDATE encounters SET chief_complaint=?, vitals=?, examination=?,
+           diagnosis=?, plan=?, notes=?, status=?, updated_date=?
+           WHERE external_id=?""",
+        (req.chief_complaint, json.dumps(req.vitals or {}), req.examination,
+         json.dumps(req.diagnosis or []), req.plan, req.notes, "completed", now,
+         encounter_id),
+    )
+    conn.commit()
+    return {"external_id": encounter_id, "status": "completed", "updated_date": now}
+
+
+# ─── Diagnostic Report Endpoints ─────────────────────────
+
+@app.post("/api/v1/diagnostic_report/")
+def create_diagnostic_report(req: DiagnosticReportRequest, request: Request,
+                             conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    ext_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO diagnostic_reports
+           (external_id, encounter_id, patient_id, doctor_id, report_type,
+            title, category, findings, impression, recommendations, icd_codes, created_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ext_id, req.encounter_id or "", req.patient_id, user["external_id"],
+         req.report_type, req.title, req.category, req.findings, req.impression,
+         req.recommendations, json.dumps(req.icd_codes or []), now),
+    )
+    conn.commit()
+    _append_audit(conn, "REPORT_CREATED", user["external_id"], req.patient_id,
+                  ["DiagnosticReport"], metadata={"report_id": ext_id, "title": req.title})
+    ret = {
+        "external_id": ext_id, "title": req.title, "category": req.category,
+        "report_type": req.report_type, "findings": req.findings,
+        "impression": req.impression, "recommendations": req.recommendations,
+        "icd_codes": req.icd_codes, "status": "final", "created_date": now,
+        "doctor": f"{user['first_name']} {user['last_name']}",
+    }
+    _notify_uhi_switch(req.patient_id, "DiagnosticReport", ret)
+    return ret
+
+
+@app.get("/api/v1/diagnostic_report/")
+def list_diagnostic_reports(request: Request, patient_id: str = "",
+                            conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    if patient_id:
+        rows = conn.execute(
+            "SELECT * FROM diagnostic_reports WHERE patient_id=? ORDER BY created_date DESC",
+            (patient_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM diagnostic_reports ORDER BY created_date DESC LIMIT 50").fetchall()
+    results = [{**dict(r), "icd_codes": json.loads(r["icd_codes"] or "[]")} for r in rows]
+    return {"count": len(results), "results": results}
+
+
+# ─── Prescription Endpoints ─────────────────────────
+
+@app.post("/api/v1/prescription/")
+def create_prescription(req: PrescriptionRequest, request: Request,
+                        conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    ext_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO prescriptions
+           (external_id, encounter_id, patient_id, doctor_id, medication,
+            dosage, frequency, duration, route, instructions, created_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ext_id, req.encounter_id or "", req.patient_id, user["external_id"],
+         req.medication, req.dosage, req.frequency, req.duration, req.route,
+         req.instructions, now),
+    )
+    conn.commit()
+    return {
+        "external_id": ext_id, "medication": req.medication, "dosage": req.dosage,
+        "frequency": req.frequency, "duration": req.duration, "route": req.route,
+        "instructions": req.instructions, "status": "active", "created_date": now,
+    }
+
+
+@app.get("/api/v1/prescription/")
+def list_prescriptions(request: Request, patient_id: str = "",
+                       conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    if patient_id:
+        rows = conn.execute(
+            "SELECT * FROM prescriptions WHERE patient_id=? ORDER BY created_date DESC",
+            (patient_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM prescriptions ORDER BY created_date DESC LIMIT 50").fetchall()
+    return {"count": len(rows), "results": [dict(r) for r in rows]}
+
+
+# ─── Lab Result Endpoints ─────────────────────────
+
+@app.post("/api/v1/lab_result/")
+def create_lab_result(req: LabResultRequest, request: Request,
+                      conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    ext_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO lab_results
+           (external_id, encounter_id, patient_id, ordered_by, panel_name,
+            results, notes, created_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ext_id, req.encounter_id or "", req.patient_id, user["external_id"],
+         req.panel_name, json.dumps(req.results or []), req.notes, now),
+    )
+    conn.commit()
+    ret = {
+        "external_id": ext_id, "panel_name": req.panel_name,
+        "results": req.results, "status": "final", "created_date": now,
+    }
+    _notify_uhi_switch(req.patient_id, "Observation", ret) # Lab Results map to FHIR Observation
+    return ret
+
+
+@app.get("/api/v1/lab_result/")
+def list_lab_results(request: Request, patient_id: str = "",
+                     conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    if patient_id:
+        rows = conn.execute(
+            "SELECT * FROM lab_results WHERE patient_id=? ORDER BY created_date DESC",
+            (patient_id,)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM lab_results ORDER BY created_date DESC LIMIT 50").fetchall()
+    results = [{**dict(r), "results": json.loads(r["results"] or "[]")} for r in rows]
+    return {"count": len(results), "results": results}
+
+
+@app.get("/api/v1/cross_hospital/consented_patients/")
+def get_consented_patients(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    hospital_id = os.environ.get("HOSPITAL_ID", "HOSP-001")
+    try:
+        import httpx
+        res = httpx.get(f"http://localhost:8080/hospital/{hospital_id}/consented_patients", timeout=3.0)
+        return res.json()
+    except Exception as e:
+        return {"hospital_id": hospital_id, "consented_patients": [], "active_consents": 0, "error": str(e)}
+
+
+# ─── AI Chatbot Endpoint ─────────────────────────────────
+
+@app.post("/api/v1/chat/")
+def chat_with_ai(req: ChatRequest, request: Request,
+                 conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    session_id = req.session_id or str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Build patient context if patient_id provided
+    patient_context = ""
+    if req.patient_id:
+        patient = None
+        for p in PATIENTS:
+            if (p["external_id"] == req.patient_id or
+                    p["meta"].get("abha_id") == req.patient_id or
+                    str(p["id"]) == req.patient_id):
+                patient = p
+                break
+
+        if patient:
+            pid = patient["external_id"]
+            encounters = conn.execute(
+                "SELECT * FROM encounters WHERE patient_id=? ORDER BY created_date DESC LIMIT 5",
+                (pid,)).fetchall()
+            reports = conn.execute(
+                "SELECT * FROM diagnostic_reports WHERE patient_id=? ORDER BY created_date DESC LIMIT 5",
+                (pid,)).fetchall()
+            prescriptions = conn.execute(
+                "SELECT * FROM prescriptions WHERE patient_id=? AND status='active'",
+                (pid,)).fetchall()
+            labs = conn.execute(
+                "SELECT * FROM lab_results WHERE patient_id=? ORDER BY created_date DESC LIMIT 5",
+                (pid,)).fetchall()
+
+            patient_context = f"""
+PATIENT: {patient['name']} ({patient['gender']}, DOB: {patient.get('date_of_birth','')})
+ABHA ID: {patient['meta'].get('abha_id','')}
+Blood Group: {patient.get('blood_group','')}
+
+RECENT ENCOUNTERS:
+{chr(10).join(f"- {e['chief_complaint']} ({e['created_date'][:10]}) — Diagnosis: {e['diagnosis']}" for e in encounters) if encounters else 'None'}
+
+DIAGNOSTIC REPORTS:
+{chr(10).join(f"- {r['title']}: {r['findings'][:200]}" for r in reports) if reports else 'None'}
+
+ACTIVE MEDICATIONS:
+{chr(10).join(f"- {p['medication']} {p['dosage']} {p['frequency']}" for p in prescriptions) if prescriptions else 'None'}
+
+RECENT LAB RESULTS:
+{chr(10).join(f"- {l['panel_name']}: {l['results'][:200]}" for l in labs) if labs else 'None'}
+"""
+
+    # Get chat history
+    history = conn.execute(
+        "SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY id ASC LIMIT 20",
+        (session_id,)
+    ).fetchall()
+
+    # Save user message
+    user_msg_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO chat_messages (external_id, session_id, patient_id, user_id, role, content, created_date) VALUES (?,?,?,?,?,?,?)",
+        (user_msg_id, session_id, req.patient_id or "", user["username"], "user", req.message, now),
+    )
+
+    # Build AI response
+    try:
+        ai_response = medgemma_ai.chat(req.message, patient_context,
+                                        [(h["role"], h["content"]) for h in history])
+    except Exception as e:
+        ai_response = _fallback_chat_response(req.message, patient_context)
+
+    # Save AI response
+    ai_msg_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO chat_messages (external_id, session_id, patient_id, user_id, role, content, created_date) VALUES (?,?,?,?,?,?,?)",
+        (ai_msg_id, session_id, req.patient_id or "", "ai", "assistant", ai_response, now),
+    )
+    conn.commit()
+
+    return {
+        "session_id": session_id,
+        "message": ai_response,
+        "patient_id": req.patient_id,
+    }
+
+
+def _fallback_chat_response(message: str, patient_context: str) -> str:
+    """Generate a basic response when AI service is unavailable."""
+    msg_lower = message.lower()
+    if patient_context:
+        if "summary" in msg_lower or "summarize" in msg_lower:
+            return f"Based on the patient records available:\n\n{patient_context}\n\nThis patient has active clinical data. Please review the encounters and diagnostic reports for detailed clinical information. I recommend running a MedGemma Comprehensive Analysis for a full AI-powered summary."
+        elif "medication" in msg_lower or "prescription" in msg_lower or "drug" in msg_lower:
+            return f"Here are the relevant medication details from the patient's records:\n\n{patient_context}\n\nPlease verify all medications with the prescribing physician before making any changes."
+        elif "plan" in msg_lower or "treatment" in msg_lower:
+            return f"Based on the patient's current records:\n\n{patient_context}\n\nI recommend reviewing the most recent encounter notes and diagnostic reports to formulate an updated treatment plan. Consider running a MedGemma SOAP analysis for AI-assisted plan generation."
+    return "I'm your AI clinical assistant. I can help analyze patient records, suggest treatment plans, review medications, and answer clinical questions. Please select a patient and ask me anything about their medical history."
+
+
+@app.get("/api/v1/chat/history/")
+def get_chat_history(request: Request, session_id: str = "",
+                     conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    if not session_id:
+        return {"messages": []}
+    rows = conn.execute(
+        "SELECT * FROM chat_messages WHERE session_id=? ORDER BY id ASC",
+        (session_id,)
+    ).fetchall()
+    return {"messages": [{"role": r["role"], "content": r["content"],
+                          "created_date": r["created_date"]} for r in rows]}
+
+
+# ─── Cross-Hospital Data Proxy ─────────────────────────
+
+@app.get("/api/v1/cross_hospital/hospitals/")
+def list_uhi_hospitals(request: Request):
+    """Proxy to UHI Switch — list registered hospitals."""
+    get_current_user(request)
+    import requests as req_lib
+    uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
+    try:
+        resp = req_lib.get(f"{uhi_url}/hospital/list", timeout=5)
+        return resp.json()
+    except Exception as e:
+        return []
+
+
+@app.get("/api/v1/cross_hospital/patient_records/")
+def get_cross_hospital_records(request: Request, abha_id: str = ""):
+    """Proxy to UHI Switch — get patient records from all hospitals."""
+    get_current_user(request)
+    if not abha_id:
+        raise HTTPException(status_code=400, detail="abha_id required")
+    import requests as req_lib
+    uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
+    try:
+        resp = req_lib.get(f"{uhi_url}/app/patient/{abha_id}/records", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"UHI returned {resp.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/v1/cross_hospital/summary/")
+def get_cross_hospital_summary(request: Request, abha_id: str = ""):
+    """Proxy to UHI Switch — get patient data summary."""
+    get_current_user(request)
+    if not abha_id:
+        raise HTTPException(status_code=400, detail="abha_id required")
+    import requests as req_lib
+    uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
+    try:
+        resp = req_lib.get(f"{uhi_url}/app/patient/{abha_id}/summary", timeout=10)
+        return resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ─── Dashboard Stats ─────────────────────────────────
+
+@app.get("/api/v1/dashboard/stats/")
+def get_dashboard_stats(request: Request,
+                        conn: sqlite3.Connection = Depends(get_db)):
+    user = get_current_user(request)
+    enc_count = conn.execute("SELECT COUNT(*) as c FROM encounters").fetchone()["c"]
+    report_count = conn.execute("SELECT COUNT(*) as c FROM diagnostic_reports").fetchone()["c"]
+    rx_count = conn.execute("SELECT COUNT(*) as c FROM prescriptions WHERE status='active'").fetchone()["c"]
+    lab_count = conn.execute("SELECT COUNT(*) as c FROM lab_results").fetchone()["c"]
+    analysis_count = conn.execute("SELECT COUNT(*) as c FROM analyses").fetchone()["c"]
+
+    recent_encounters = conn.execute(
+        "SELECT * FROM encounters ORDER BY created_date DESC LIMIT 5"
+    ).fetchall()
+
+    return {
+        "patient_count": len(PATIENTS),
+        "encounter_count": enc_count,
+        "report_count": report_count,
+        "prescription_count": rx_count,
+        "lab_count": lab_count,
+        "analysis_count": analysis_count,
+        "facility_count": len(FACILITIES),
+        "recent_encounters": [{**dict(e), "vitals": json.loads(e["vitals"] or "{}"),
+                               "diagnosis": json.loads(e["diagnosis"] or "[]")}
+                              for e in recent_encounters],
     }
 
 

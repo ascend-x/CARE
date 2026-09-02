@@ -8,7 +8,7 @@ Core principles:
 4. IMMUTABLE AUDIT — Every action is hash-chained and tamper-evident
 """
 
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
@@ -85,8 +85,40 @@ async def monitor_hospitals():
             
             await asyncio.sleep(30) # Check every 30 seconds
 
+def seed_db():
+    db = SessionLocal()
+    # Check if bundles exist for demo patient
+    abha_id = "91-1234-5678-9012"
+    existing = db.query(models.EncryptedBundleRef).filter(models.EncryptedBundleRef.patient_abha_id == abha_id).first()
+    if not existing:
+        # Insert mock bundle for Hospital A
+        db.add(models.EncryptedBundleRef(
+            bundle_ref_id=f"BDL-{uuid.uuid4().hex[:12]}",
+            patient_abha_id=abha_id,
+            source_hospital_id="HOSP-001",
+            encryption_key=generate_bundle_key(),
+            bundle_location="https://care.ohc.network/api/v1/patient/91-1234-5678-9012/bundle",
+            resource_count=12,
+            resource_types=["Encounter", "Observation", "DiagnosticReport", "Condition"],
+            expires_at=datetime.now(timezone.utc) + timedelta(days=365)
+        ))
+        # Insert mock bundle for Hospital B
+        db.add(models.EncryptedBundleRef(
+            bundle_ref_id=f"BDL-{uuid.uuid4().hex[:12]}",
+            patient_abha_id=abha_id,
+            source_hospital_id="HOSP-002",
+            encryption_key=generate_bundle_key(),
+            bundle_location="https://citycare.hospital/api/fhir/patient/91-1234-5678-9012/bundle",
+            resource_count=5,
+            resource_types=["Encounter", "DiagnosticReport", "ImagingStudy"],
+            expires_at=datetime.now(timezone.utc) + timedelta(days=365)
+        ))
+        db.commit()
+    db.close()
+
 @app.on_event("startup")
 async def startup_event():
+    seed_db()
     asyncio.create_task(monitor_hospitals())
 
 app.add_middleware(
@@ -96,6 +128,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Live Sync WebSockets ────────────────────────
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, abha_id: str):
+        await websocket.accept()
+        self.active_connections[abha_id] = websocket
+        logger.info(f"WebSocket connected for patient: {abha_id}")
+
+    def disconnect(self, abha_id: str):
+        if abha_id in self.active_connections:
+            del self.active_connections[abha_id]
+            logger.info(f"WebSocket disconnected for patient: {abha_id}")
+
+    async def send_personal_message(self, message: str, abha_id: str):
+        if abha_id in self.active_connections:
+            await self.active_connections[abha_id].send_text(message)
+            logger.info(f"Live Sync payload pushed to patient: {abha_id}")
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/patient/{abha_id}")
+async def websocket_endpoint(websocket: WebSocket, abha_id: str):
+    await manager.connect(websocket, abha_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(abha_id)
+
+class InternalNotifyRequest(BaseModel):
+    patient_abha_id: str
+    resource_type: str
+    resource_raw: dict
+
+@app.post("/internal/notify")
+async def internal_notify(req: InternalNotifyRequest):
+    """Webhook called by care_be when a new SOAP note or file is created."""
+    import json
+    payload = json.dumps({
+        "type": "NEW_FILE",
+        "resource_type": req.resource_type,
+        "resource": req.resource_raw
+    })
+    await manager.send_personal_message(payload, req.patient_abha_id)
+    
+    # Quick hack to make dynamically uploaded files appear in the cross-hospital mock
+    if req.resource_type == "DocumentReference":
+        from patient_data_hospital_a import MONTHLY_PROGRESS
+        MONTHLY_PROGRESS.append({
+            "month": f"New File",
+            "bp": "-",
+            "weight_kg": "-",
+            "resting_hr": "-",
+            "total_cholesterol": "-",
+            "triglycerides": "-",
+            "hdl": "-",
+            "medication": "-",
+            "exercise": "-",
+            "assessment": f"Dynamically Uploaded: {req.resource_raw.get('file_name', 'Unknown')}",
+        })
+        
+    return {"status": "ok"}
 
 
 # ─── Pydantic Schemas ────────────────────────────
@@ -227,9 +326,16 @@ def register_hospital(req: HospitalRegisterRequest, db: Session = Depends(get_db
 
 
 @app.get("/hospital/list", response_model=List[HospitalResponse])
-def list_hospitals(db: Session = Depends(get_db)):
-    """List all registered hospitals."""
-    return db.query(models.Hospital).filter(models.Hospital.is_active == True).all()
+def list_hospitals(q: Optional[str] = None, db: Session = Depends(get_db)):
+    """List all registered hospitals, optionally filtered by a search query."""
+    query = db.query(models.Hospital).filter(models.Hospital.is_active == True)
+    if q:
+        search = f"%{q}%"
+        query = query.filter(
+            (models.Hospital.name.ilike(search)) |
+            (models.Hospital.hospital_id.ilike(search))
+        )
+    return query.all()
 
 
 # ─── Consent Management ────────────────────────────
@@ -317,6 +423,25 @@ def list_consents(patient_abha_id: str, db: Session = Depends(get_db)):
     return db.query(models.ConsentArtifact).filter(
         models.ConsentArtifact.patient_abha_id == patient_abha_id
     ).order_by(models.ConsentArtifact.granted_at.desc()).all()
+
+
+@app.get("/hospital/{hospital_id}/consented_patients")
+def get_hospital_consented_patients(hospital_id: str, db: Session = Depends(get_db)):
+    """Return a list of ABHA IDs that have granted active consent to this hospital."""
+    consents = db.query(models.ConsentArtifact).filter(
+        models.ConsentArtifact.hospital_id == hospital_id,
+        models.ConsentArtifact.status == "GRANTED",
+        models.ConsentArtifact.expires_at > datetime.now(timezone.utc)
+    ).all()
+    
+    # Get unique patient IDs
+    patients = list(set([c.patient_abha_id for c in consents]))
+    
+    return {
+        "hospital_id": hospital_id,
+        "consented_patients": patients,
+        "active_consents": len(consents)
+    }
 
 
 # ─── Encrypted FHIR Bundle Routing ────────────────────────────
