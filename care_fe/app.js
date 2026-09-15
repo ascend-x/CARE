@@ -338,7 +338,8 @@ async function renderPatientDetail(id) {
           <div class="tab" data-tab="prescriptions">Prescriptions (${data.prescriptions.length})</div>
           <div class="tab" data-tab="labs">Labs (${data.lab_results.length})</div>
         </div>
-        <div>
+        <div style="display:flex; gap:10px;">
+          <button class="btn btn-outline btn-sm" onclick="window.open('/api/v1/patient/${id}/export/', '_blank')">Export PDF</button>
           <button class="btn btn-primary btn-sm" onclick="navigateTo('new_encounter', {id:'${id}'})">New Encounter</button>
         </div>
       </div>

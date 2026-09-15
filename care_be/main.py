@@ -1130,6 +1130,76 @@ def get_patient_detail(patient_id: str, request: Request,
         "lab_results": lab_list,
     }
 
+@app.get("/api/v1/patient/{patient_id}/export/")
+def export_patient_record(patient_id: str, request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    """Export the blended patient record as a printable HTML document."""
+    data = get_patient_detail(patient_id, request, conn)
+    patient = data["patient"]
+    encs = data["encounters"]
+    reps = data["diagnostic_reports"]
+    html = f"""
+    <html><head><title>Medical Record - {patient['name']}</title>
+    <style>
+      body {{ font-family: sans-serif; padding: 40px; color: #1f2937; line-height: 1.6; max-width: 800px; margin: 0 auto; }}
+      h1, h2, h3 {{ color: #111827; }}
+      .header {{ border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; margin-bottom: 30px; }}
+      .section {{ margin-bottom: 40px; }}
+      .card {{ border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 15px; break-inside: avoid; page-break-inside: avoid; }}
+      .badge {{ background: #eff6ff; color: #1d4ed8; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-left: 8px; vertical-align: middle; }}
+      .meta {{ color: #6b7280; font-size: 0.9em; }}
+      @media print {{
+        body {{ padding: 0; }}
+        .no-print {{ display: none; }}
+      }}
+    </style></head>
+    <body>
+      <div class="no-print" style="margin-bottom: 20px;">
+        <button onclick="window.print()" style="padding: 10px 20px; background: #0f172a; color: white; border: none; border-radius: 6px; cursor: pointer;">Print / Save as PDF</button>
+      </div>
+      <div class="header">
+        <h1>Comprehensive Medical Record</h1>
+        <h2>{patient['name']} (ABHA: {patient['meta'].get('abha_id')})</h2>
+        <p><strong>DOB:</strong> {patient['date_of_birth']} | <strong>Blood Group:</strong> {patient['blood_group']} | <strong>Gender:</strong> {patient['gender']}</p>
+        <p class="meta">Generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+      </div>
+      
+      <div class="section">
+        <h2>Clinical Encounters ({len(encs)})</h2>
+    """
+    for enc in encs:
+        html += f"""
+        <div class="card">
+          <h3 style="margin-top:0;">{enc['chief_complaint']} <span class="badge">{enc['encounter_type']}</span></h3>
+          <p class="meta" style="margin-top:-10px;">{enc['created_date'][:10]} | Dr. {enc['doctor_id']}</p>
+          <p><strong>Diagnosis:</strong> {', '.join(enc['diagnosis']) if enc.get('diagnosis') else 'None'}</p>
+          <p><strong>Examination:</strong> {enc['examination']}</p>
+          <p><strong>Plan:</strong> {enc['plan']}</p>
+          <p style="margin-bottom:0;"><strong>Notes:</strong> {enc['notes']}</p>
+        </div>
+        """
+        
+    html += f"""
+      </div>
+      <div class="section">
+        <h2>Diagnostic Reports ({len(reps)})</h2>
+    """
+    for rep in reps:
+        html += f"""
+        <div class="card">
+          <h3 style="margin-top:0;">{rep['title']} <span class="badge">{rep['category']}</span></h3>
+          <p class="meta" style="margin-top:-10px;">{rep['created_date'][:10]} | Dr. {rep['doctor_id']}</p>
+          <p><strong>Findings:</strong> {rep['findings']}</p>
+          <p style="margin-bottom:0;"><strong>Impression:</strong> {rep['impression']}</p>
+        </div>
+        """
+        
+    html += """
+      </div>
+      <script>window.onload = function() { window.print(); }</script>
+    </body></html>
+    """
+    return HTMLResponse(html)
+
 
 import httpx
 
