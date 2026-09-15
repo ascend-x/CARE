@@ -44,6 +44,8 @@ UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 _hosp_id = os.environ.get("HOSPITAL_ID", "HOSP-001").lower()
 DB_PATH = os.path.join(os.path.dirname(__file__), f"care_lite_{_hosp_id}.db")
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "care_fe")
+# UHI Switch uses its own hospital registry IDs, which differ from local HOSPITAL_ID
+UHI_HOSPITAL_ID = os.environ.get("UHI_HOSPITAL_ID", "")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
@@ -592,15 +594,34 @@ def run_analysis(req: MedGemmaRequest, request: Request,
                 import requests as req_lib
                 uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
                 abha = patient["meta"].get("abha_id", "")
+                uhi_hosp_id = UHI_HOSPITAL_ID
                 hospital_id = os.environ.get("HOSPITAL_ID", "HOSP-001")
-                cr = req_lib.get(f"{uhi_url}/app/patient/{abha}/consents", timeout=3)
-                if cr.status_code == 200:
-                    for c in cr.json().get("consents", []):
-                        if c.get("hospital_id") == hospital_id and c.get("status") == "GRANTED":
-                            rr = req_lib.get(f"{uhi_url}/app/patient/{abha}/records", timeout=3)
-                            if rr.status_code == 200:
-                                input_data["uhi_cross_hospital_records"] = rr.json()
-                            break
+                if uhi_hosp_id:
+                    cr = req_lib.get(f"{uhi_url}/app/patient/{abha}/consents", timeout=3)
+                    if cr.status_code == 200:
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        for c in cr.json().get("consents", []):
+                            # Check expiration
+                            c_exp = c.get("expires_at")
+                            if c_exp:
+                                if not c_exp.endswith('Z') and '+' not in c_exp:
+                                    c_exp += '+00:00'
+                                is_expired = now_iso > c_exp
+                            else:
+                                is_expired = False
+                                
+                            # Consent is granted to the internal HOSPITAL_ID and not expired
+                            if c.get("hospital_id") == hospital_id and c.get("status") == "GRANTED" and not is_expired:
+                                rr = req_lib.get(f"{uhi_url}/app/patient/{abha}/records", timeout=3)
+                                if rr.status_code == 200:
+                                    # Filter out our own records using UHI registry ID
+                                    uhi_data = rr.json()
+                                    filtered_data = {
+                                        "progress_records": [r for r in uhi_data.get("progress_records", []) if r.get("source_hospital_id") != uhi_hosp_id],
+                                        "imaging_records": [r for r in uhi_data.get("imaging_records", []) if r.get("source_hospital_id") != uhi_hosp_id]
+                                    }
+                                    input_data["uhi_cross_hospital_records"] = filtered_data
+                                break
             except Exception:
                 pass
 
@@ -1026,57 +1047,74 @@ def get_patient_detail(patient_id: str, request: Request,
     lab_list = [{**dict(l), "results": json.loads(l["results"] or "[]")} for l in labs]
 
     # Seamlessly Blend UHI Records if Consent is Active
+    uhi_hosp_id = UHI_HOSPITAL_ID  # The UHI switch's registry ID for this hospital
     hospital_id = os.environ.get("HOSPITAL_ID", "HOSP-001")
     uhi_url = os.environ.get("UHI_SWITCH_URL", "http://localhost:8080")
     try:
         import requests as req_lib
         abha = patient["meta"].get("abha_id", "91-1234-5678-9012")
-        resp = req_lib.get(f"{uhi_url}/app/patient/{abha}/consents", timeout=3)
-        has_consent = False
-        if resp.status_code == 200:
-            for c in resp.json().get("consents", []):
-                if c.get("hospital_id") == hospital_id and c.get("status") == "GRANTED":
-                    has_consent = True
-                    break
-        
-        if has_consent:
+        if uhi_hosp_id:  # Only attempt UHI blending if UHI_HOSPITAL_ID is configured
+            resp = req_lib.get(f"{uhi_url}/app/patient/{abha}/consents", timeout=3)
+            has_consent = False
+            if resp.status_code == 200:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                for c in resp.json().get("consents", []):
+                    # Check expiration
+                    c_exp = c.get("expires_at")
+                    if c_exp:
+                        if not c_exp.endswith('Z') and '+' not in c_exp:
+                            c_exp += '+00:00'
+                        is_expired = now_iso > c_exp
+                    else:
+                        is_expired = False
+                        
+                    # Consent is granted to the internal HOSPITAL_ID and not expired
+                    if c.get("hospital_id") == hospital_id and c.get("status") == "GRANTED" and not is_expired:
+                        has_consent = True
+                        break
+            
+            # Always fetch UHI records because native mock records live there
             resp = req_lib.get(f"{uhi_url}/app/patient/{abha}/records", timeout=3)
             if resp.status_code == 200:
                 uhi_data = resp.json()
                 for r in uhi_data.get("progress_records", []):
-                    enc_list.append({
-                        "id": f"uhi-{uuid.uuid4().hex[:8]}",
-                        "external_id": f"uhi-{uuid.uuid4().hex[:8]}",
-                        "patient_id": pid,
-                        "doctor_id": "UHI Network",
-                        "encounter_type": "Progress Report (UHI)",
-                        "chief_complaint": f"Imported from {r.get('source_hospital')}",
-                        "vitals": json.dumps({"bp": r.get("blood_pressure"), "weight": r.get("weight_kg")}),
-                        "examination": f"Cholesterol: {r.get('total_cholesterol')} | HDL: {r.get('hdl')}",
-                        "diagnosis": [],
-                        "plan": r.get("assessment"),
-                        "notes": f"Medication: {r.get('medication')} | Exercise: {r.get('exercise')}",
-                        "status": "completed",
-                        "created_date": f"2026-01-01T00:00:00Z", # Fallback date
-                        "updated_date": ""
-                    })
+                    is_native = (r.get("source_hospital_id") == uhi_hosp_id)
+                    if is_native or has_consent:
+                        enc_list.append({
+                            "id": f"uhi-{uuid.uuid4().hex[:8]}",
+                            "external_id": f"uhi-{uuid.uuid4().hex[:8]}",
+                            "patient_id": pid,
+                            "doctor_id": "UHI Network",
+                            "encounter_type": "Progress Report" if is_native else "Progress Report (UHI)",
+                            "chief_complaint": f"Month {r.get('month', '')} Follow-up at {r.get('source_hospital')}",
+                            "vitals": json.dumps({"bp": r.get("blood_pressure"), "weight": r.get("weight_kg")}),
+                            "examination": f"Cholesterol: {r.get('total_cholesterol')} | HDL: {r.get('hdl')}",
+                            "diagnosis": ["Native Import"] if is_native else ["UHI Import"],
+                            "plan": r.get("assessment"),
+                            "notes": f"Medication: {r.get('medication')} | Exercise: {r.get('exercise')}",
+                            "status": "completed",
+                            "created_date": f"2026-01-01T00:00:00Z",
+                            "updated_date": ""
+                        })
                 for r in uhi_data.get("imaging_records", []):
-                    rep_list.append({
-                        "id": f"uhi-{uuid.uuid4().hex[:8]}",
-                        "external_id": f"uhi-{uuid.uuid4().hex[:8]}",
-                        "encounter_id": "",
-                        "patient_id": pid,
-                        "doctor_id": r.get("radiologist", "UHI Network"),
-                        "report_type": r.get("type", "imaging"),
-                        "title": r.get("technique", "Imaging Report"),
-                        "category": "Imaging (UHI)",
-                        "findings": r.get("findings", ""),
-                        "impression": r.get("impression", ""),
-                        "recommendations": r.get("comparison", ""),
-                        "icd_codes": [],
-                        "status": "final",
-                        "created_date": f"2026-01-01T00:00:00Z"
-                    })
+                    is_native = (r.get("source_hospital_id") == uhi_hosp_id)
+                    if is_native or has_consent:
+                        rep_list.append({
+                            "id": f"uhi-{uuid.uuid4().hex[:8]}",
+                            "external_id": f"uhi-{uuid.uuid4().hex[:8]}",
+                            "encounter_id": "",
+                            "patient_id": pid,
+                            "doctor_id": r.get("radiologist", "UHI Network"),
+                            "report_type": r.get("type", "imaging"),
+                            "title": r.get("technique", "Imaging Report"),
+                            "category": "Imaging" if is_native else "Imaging (UHI)",
+                            "findings": r.get("findings", ""),
+                            "impression": r.get("impression", ""),
+                            "recommendations": r.get("comparison", ""),
+                            "icd_codes": [],
+                            "status": "final",
+                            "created_date": f"2026-01-01T00:00:00Z"
+                        })
     except Exception as e:
         print(f"Failed to fetch UHI records for seamless EMR view: {e}")
 

@@ -4,6 +4,23 @@ let currentPage = 'dashboard';
 let currentPatientId = null;
 let appConfig = { hospital_name: 'CARE EMR', hospital_id: '' };
 
+const initTheme = () => {
+  const saved = localStorage.getItem('care_theme');
+  if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+};
+initTheme();
+
+const toggleTheme = () => {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'light' ? 'dark' : 'light';
+  if (next === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    localStorage.setItem('care_theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('care_theme', 'dark');
+  }
+};
 const storage = {
   get token() { return localStorage.getItem('care_access_token'); },
   set token(v) { v ? localStorage.setItem('care_access_token', v) : localStorage.removeItem('care_access_token'); },
@@ -143,6 +160,7 @@ function renderSidebar() {
             <div class="name">${currentUser?.first_name||''} ${currentUser?.last_name||''}</div>
             <div class="role">${currentUser?.user_type||''}</div>
           </div>
+          <button class="btn-logout" onclick="toggleTheme()" title="Toggle Theme" style="margin-right: 4px;">☀</button>
           <button class="btn-logout" onclick="logout()" title="Logout">✕</button>
         </div>
       </div>
@@ -525,8 +543,8 @@ async function renderChat(el) {
         <div class="chat-msg ai">Hello Dr. ${currentUser?.last_name || ''}, I am your Clinical Assistant. How can I help you today? If you want to analyze a specific patient, enter their ABHA ID below.</div>
       </div>
       <div class="chat-input-area">
-        <input type="text" class="form-input" id="chat-patient" placeholder="Patient ABHA ID (optional)" style="width:200px; background:var(--bg-secondary);">
-        <input type="text" class="chat-input" id="chat-input" placeholder="Type your clinical question..." style="color: #0f172a !important;">
+        <input type="text" class="form-input" id="chat-patient" placeholder="Patient ABHA ID (optional)" style="width:200px;">
+        <input type="text" class="chat-input" id="chat-input" placeholder="[ SYS.INPUT ] Type your clinical query...">
         <button class="chat-send" id="chat-send">Send</button>
       </div>
     </div>
