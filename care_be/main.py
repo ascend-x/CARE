@@ -1202,6 +1202,8 @@ def export_patient_record(patient_id: str, request: Request, conn: sqlite3.Conne
 
 
 import httpx
+import logging
+logger = logging.getLogger(__name__)
 
 def _notify_uhi_switch(patient_abha_id: str, resource_type: str, resource_raw: dict):
     """Notify UHI Switch about new FHIR resources for live sync."""
@@ -1212,13 +1214,15 @@ def _notify_uhi_switch(patient_abha_id: str, resource_type: str, resource_raw: d
             "id": resource_raw.get("external_id"),
             **resource_raw
         }
+        logger.warning(f"Sending UHI notification for {patient_abha_id}")
         httpx.post("http://localhost:8080/internal/notify", json={
             "patient_abha_id": patient_abha_id,
             "resource_type": resource_type,
             "resource_raw": fhir_resource
         }, timeout=2.0)
+        logger.warning("UHI notification sent successfully")
     except Exception as e:
-        print(f"Live Sync UHI notify failed: {e}")
+        logger.error(f"Live Sync UHI notify failed: {e}")
 
 # ─── Encounter Endpoints ─────────────────────────────────────
 
@@ -1242,13 +1246,22 @@ def create_encounter(req: EncounterRequest, request: Request,
                   ["Encounter"], metadata={"encounter_id": ext_id})
     ret = {
         "external_id": ext_id, "patient_id": req.patient_id,
+        "title": req.chief_complaint or "New Encounter",
         "encounter_type": req.encounter_type, "chief_complaint": req.chief_complaint,
         "vitals": req.vitals, "examination": req.examination,
         "diagnosis": req.diagnosis, "plan": req.plan, "notes": req.notes,
         "status": "in-progress", "created_date": now,
         "doctor": f"{user['first_name']} {user['last_name']}",
     }
-    _notify_uhi_switch(req.patient_id, "Encounter", ret)
+    
+    patient = None
+    for p in PATIENTS:
+        if p["external_id"] == req.patient_id or p["meta"].get("abha_id") == req.patient_id or str(p["id"]) == req.patient_id:
+            patient = p
+            break
+    abha_id = patient["meta"].get("abha_id") if patient else req.patient_id
+    
+    _notify_uhi_switch(abha_id, "Encounter", ret)
     return ret
 
 

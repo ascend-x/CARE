@@ -1058,8 +1058,18 @@ def app_patient_summary(abha_id: str, db: Session = Depends(get_db)):
             all_resource_types.update(b.resource_types)
         total_resources += b.resource_count or 0
 
-    active_consents = sum(1 for c in consents if c.status == "GRANTED")
-    revoked_consents = sum(1 for c in consents if c.status == "REVOKED")
+    now = datetime.now(timezone.utc)
+    active_consents = 0
+    revoked_consents = 0
+    expired_consents = 0
+    for c in consents:
+        exp = c.expires_at.replace(tzinfo=timezone.utc) if c.expires_at.tzinfo is None else c.expires_at
+        if c.status == "REVOKED":
+            revoked_consents += 1
+        elif c.status == "GRANTED" and exp > now:
+            active_consents += 1
+        elif c.status == "GRANTED":
+            expired_consents += 1
 
     return {
         "patient_abha_id": abha_id,
